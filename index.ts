@@ -82,6 +82,8 @@ type PRDetails = {
           | "REVIEW_REQUIRED"
           | null;
         reviewThreads: { nodes: Array<{ isResolved: boolean }> };
+        additions: number;
+        deletions: number;
       };
     };
   };
@@ -135,6 +137,8 @@ query($owner:String!, $repo:String!, $num:Int!) {
       mergeable
       reviewDecision
       reviewThreads(first:100) { nodes { isResolved } }
+      additions
+      deletions
     }
   }
 }`;
@@ -143,7 +147,12 @@ async function getStatus(
   owner: string,
   repo: string,
   num: number,
-): Promise<{ status: Status; hasConflict: boolean }> {
+): Promise<{
+  status: Status;
+  hasConflict: boolean;
+  additions: number;
+  deletions: number;
+}> {
   const out =
     await $`gh api graphql -f query=${detailsQuery} -F owner=${owner} -F repo=${repo} -F num=${num}`.quiet();
   const parsed = JSON.parse(out.stdout.toString()) as PRDetails;
@@ -161,20 +170,31 @@ async function getStatus(
     return "open";
   })();
 
-  return { status, hasConflict };
+  return {
+    status,
+    hasConflict,
+    additions: pr.additions,
+    deletions: pr.deletions,
+  };
 }
 
 const enriched = await Promise.all(
   combinedItems.map(async (pr) => {
     const [owner, repo] = pr.repository_url.split("/").slice(-2);
-    const { status, hasConflict } = await getStatus(owner!, repo!, pr.number);
-    return { pr, status, hasConflict };
+    const { status, hasConflict, additions, deletions } = await getStatus(
+      owner!,
+      repo!,
+      pr.number,
+    );
+    return { pr, status, hasConflict, additions, deletions };
   }),
 );
 
 const isTestPR = (title: string) => /^\s*test\b/i.test(title);
-const todays = enriched.filter(({ pr }) => !isTestPR(pr.title));
-const tests = enriched.filter(({ pr }) => isTestPR(pr.title));
+const totalChanged = ({ additions, deletions }: Item) => additions + deletions;
+const bySmallestDiff = (a: Item, b: Item) => totalChanged(a) - totalChanged(b);
+const todays = enriched.filter(({ pr }) => !isTestPR(pr.title)).sort(bySmallestDiff);
+const tests = enriched.filter(({ pr }) => isTestPR(pr.title)).sort(bySmallestDiff);
 
 const escHtml = (s: string) =>
   s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
@@ -188,20 +208,41 @@ type Item = {
   pr: SearchIssuesResponse["items"][number];
   status: Status;
   hasConflict: boolean;
+  additions: number;
+  deletions: number;
 };
 
-function prefix({ status, hasConflict }: Item) {
-  return hasConflict
-    ? `${STATUS_PREFIX[status]} (conflict)`
-    : STATUS_PREFIX[status];
+function prefix({ status }: Item) {
+  return STATUS_PREFIX[status];
+}
+
+function tags({ hasConflict }: Item) {
+  return hasConflict ? " (conflict)" : "";
+}
+
+function sizeGauge({ additions, deletions }: Item) {
+  const total = additions + deletions;
+  const thresholds = [1, 50, 200, 500, 1000];
+  const filled = thresholds.filter((threshold) => total >= threshold).length;
+  return `${"█".repeat(filled)}${"░".repeat(5 - filled)}`;
+}
+
+function diffSummary({ additions, deletions }: Item) {
+  return `(+${additions}/-${deletions})`;
+}
+
+function sizeSuffix(item: Item) {
+  return `${sizeGauge(item)} ${diffSummary(item)}`;
 }
 
 function plainLine(item: Item) {
-  return `${prefix(item)} ${item.pr.title} — ${item.pr.html_url}`;
+  return `${prefix(item)} ${item.pr.title} ${sizeSuffix(item)}${tags(item)} — ${item.pr.html_url}`;
 }
 
 function htmlLine(item: Item) {
-  return `${escHtml(prefix(item))} <a href="${item.pr.html_url}" style="text-decoration: none;">${escHtml(item.pr.title)}</a>`;
+  return `${escHtml(prefix(item))} ${escHtml(sizeSuffix(item))}${escHtml(
+    tags(item),
+  )} <a href="${item.pr.html_url}" style="text-decoration: none;">${escHtml(item.pr.title)}</a>`;
 }
 
 const sections: Array<{ heading: string; items: Item[] }> = [
