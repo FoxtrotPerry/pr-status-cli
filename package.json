@@ -1,0 +1,17 @@
+{
+  "name": "github-pr-status",
+  "module": "index.ts",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "build": "bun build ./index.ts --compile --outfile pr-status",
+    "install:bin": "bun run build && mkdir -p ~/.local/bin && mv pr-status ~/.local/bin/",
+    "install:config": "cp pr-status.yaml ~/.local/bin/"
+  },
+  "devDependencies": {
+    "@types/bun": "latest"
+  },
+  "peerDependencies": {
+    "typescript": "^5"
+  }
+}
