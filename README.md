@@ -44,3 +44,9 @@ Then `source ~/.zshrc` (or open a new shell) and run anywhere:
 ```bash
 pr-status ~/path/to/your-team.yaml
 ```
+
+If your pr-status.yaml is colocated with your `pr-status` binary (in `$HOME/.local/bin` by default), then you can just run:
+
+```bash
+pr-status
+```
