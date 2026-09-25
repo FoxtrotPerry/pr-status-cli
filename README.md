@@ -19,11 +19,11 @@ bun install
 Copy `pr-status.yaml` and edit for your team:
 
 ```yaml
-repo: Onebrief/bc
-keyword: GTM
+repo: your/repo
+keyword: TEAM-TAG
 authors:
-  - Christopher-Xu
-  - jhatter-ob
+  - author1
+  - author2
 ```
 
 ## Run from source
