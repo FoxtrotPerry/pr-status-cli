@@ -1,5 +1,6 @@
 pr-status
 *.tsv
+pr-status.yaml
 
 # dependencies (bun install)
 node_modules
