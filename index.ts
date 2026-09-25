@@ -81,7 +81,13 @@ type PRDetails = {
           | "CHANGES_REQUESTED"
           | "REVIEW_REQUIRED"
           | null;
-        reviewThreads: { nodes: Array<{ isResolved: boolean }> };
+        reviewThreads: {
+          nodes: Array<{
+            isResolved: boolean;
+            comments: { nodes: Array<{ createdAt: string }> };
+          }>;
+        };
+        reviews: { nodes: Array<{ submittedAt: string | null }> };
         additions: number;
         deletions: number;
       };
@@ -136,7 +142,13 @@ query($owner:String!, $repo:String!, $num:Int!) {
       isInMergeQueue
       mergeable
       reviewDecision
-      reviewThreads(first:100) { nodes { isResolved } }
+      reviewThreads(first:100) {
+        nodes {
+          isResolved
+          comments(last:100) { nodes { createdAt } }
+        }
+      }
+      reviews(last:100) { nodes { submittedAt } }
       additions
       deletions
     }
@@ -152,6 +164,7 @@ async function getStatus(
   hasConflict: boolean;
   additions: number;
   deletions: number;
+  lastReviewActivityAt: string | null;
 }> {
   const out =
     await $`gh api graphql -f query=${detailsQuery} -F owner=${owner} -F repo=${repo} -F num=${num}`.quiet();
@@ -170,23 +183,40 @@ async function getStatus(
     return "open";
   })();
 
+  // Latest review activity = most recent of any submitted review or review-thread comment.
+  const reviewTimes = [
+    ...pr.reviews.nodes.map((r) => r.submittedAt),
+    ...pr.reviewThreads.nodes.flatMap((t) =>
+      t.comments.nodes.map((c) => c.createdAt),
+    ),
+  ].filter((t): t is string => t !== null);
+  const lastReviewActivityAt =
+    reviewTimes.length > 0
+      ? reviewTimes.reduce((a, b) => (a > b ? a : b))
+      : null;
+
   return {
     status,
     hasConflict,
     additions: pr.additions,
     deletions: pr.deletions,
+    lastReviewActivityAt,
   };
 }
 
 const enriched = await Promise.all(
   combinedItems.map(async (pr) => {
     const [owner, repo] = pr.repository_url.split("/").slice(-2);
-    const { status, hasConflict, additions, deletions } = await getStatus(
-      owner!,
-      repo!,
-      pr.number,
-    );
-    return { pr, status, hasConflict, additions, deletions };
+    const { status, hasConflict, additions, deletions, lastReviewActivityAt } =
+      await getStatus(owner!, repo!, pr.number);
+    return {
+      pr,
+      status,
+      hasConflict,
+      additions,
+      deletions,
+      lastReviewActivityAt,
+    };
   }),
 );
 
@@ -210,7 +240,27 @@ type Item = {
   hasConflict: boolean;
   additions: number;
   deletions: number;
+  lastReviewActivityAt: string | null;
 };
+
+const now = Date.now();
+
+function timeAgo(iso: string): string {
+  const diffMs = now - new Date(iso).getTime();
+  const mins = Math.max(0, Math.floor(diffMs / 60000));
+  const hrs = Math.floor(mins / 60);
+  const days = Math.floor(hrs / 24);
+  if (days > 0) return `${days}d ago`;
+  if (hrs > 0) return `${hrs}h ago`;
+  if (mins > 0) return `${mins}m ago`;
+  return "just now";
+}
+
+function reviewActivity({ lastReviewActivityAt }: Item) {
+  return lastReviewActivityAt
+    ? `last review activity: ${timeAgo(lastReviewActivityAt)}`
+    : "no review activity yet";
+}
 
 function prefix({ status }: Item) {
   return STATUS_PREFIX[status];
@@ -236,13 +286,17 @@ function sizeSuffix(item: Item) {
 }
 
 function plainLine(item: Item) {
-  return `${prefix(item)} ${item.pr.title} ${sizeSuffix(item)}${tags(item)} — ${item.pr.html_url}`;
+  return `${prefix(item)} ${item.pr.title} ${sizeSuffix(item)}${tags(item)} — ${item.pr.html_url}\n    • ${reviewActivity(item)}`;
 }
 
 function htmlLine(item: Item) {
   return `${escHtml(prefix(item))} ${escHtml(sizeSuffix(item))}${escHtml(
     tags(item),
   )} <a href="${item.pr.html_url}" style="text-decoration: none;">${escHtml(item.pr.title)}</a>`;
+}
+
+function htmlBullet(item: Item) {
+  return `<div style="margin-left: 1.5em;">• ${escHtml(reviewActivity(item))}</div>`;
 }
 
 const sections: Array<{ heading: string; items: Item[] }> = [
@@ -262,7 +316,10 @@ const htmlParts: string[] = [];
 for (const { heading, items } of sections) {
   if (items.length === 0) continue;
   htmlParts.push(`<div><b><u>${escHtml(heading)}</u></b></div>`);
-  for (const item of items) htmlParts.push(`<div>${htmlLine(item)}</div>`);
+  for (const item of items) {
+    htmlParts.push(`<div>${htmlLine(item)}</div>`);
+    htmlParts.push(htmlBullet(item));
+  }
   htmlParts.push("<div><br></div>");
 }
 const html = `<!DOCTYPE html><html><body>${htmlParts.join("")}</body></html>`;

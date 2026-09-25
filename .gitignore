@@ -1,3 +1,6 @@
+pr-status
+*.tsv
+
 # dependencies (bun install)
 node_modules
 
